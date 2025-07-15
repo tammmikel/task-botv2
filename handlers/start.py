@@ -4,11 +4,13 @@ from aiogram.filters import Command
 from database.models import UserManager
 from utils.keyboards import get_main_keyboard
 
+
 async def start_command(message: Message):
     """Обработчик команды /start"""
     try:
         print("=== Вызван start_command ===")
         telegram_id = message.from_user.id
+
         username = message.from_user.username
         first_name = message.from_user.first_name
         last_name = message.from_user.last_name

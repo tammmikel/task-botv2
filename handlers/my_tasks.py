@@ -2,15 +2,20 @@ from aiogram import Dispatcher
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram import F
 from database.models import UserManager, TaskManager, FileManager
-from utils.keyboards import get_main_keyboard
+from utils.keyboards import get_main_keyboard, clear_previous_messages
 from utils.file_storage import file_storage
 from datetime import datetime
+
 
 async def my_tasks_handler(message: Message):
     """Обработчик кнопки 'Мои задачи'"""
     try:
         print("=== Вызван my_tasks_handler ===")
         telegram_id = message.from_user.id
+        
+        # Очищаем чат
+        from main import bot
+        await clear_previous_messages(bot, telegram_id, 10)
         
         # Получаем пользователя
         user = UserManager.get_user_by_telegram_id(telegram_id)
@@ -24,6 +29,11 @@ async def my_tasks_handler(message: Message):
         if not tasks:
             await message.answer(
                 "📝 У вас пока нет задач",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[])
+            )
+            # Восстанавливаем нижнее меню
+            await message.answer(
+                "Главное меню:",
                 reply_markup=get_main_keyboard(user['role'])
             )
             return
@@ -66,6 +76,12 @@ async def my_tasks_handler(message: Message):
         await message.answer(
             tasks_text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+        )
+        
+        # Восстанавливаем нижнее меню
+        await message.answer(
+            "Главное меню:",
+            reply_markup=get_main_keyboard(user['role'])
         )
         
     except Exception as e:

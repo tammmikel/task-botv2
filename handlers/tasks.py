@@ -3,7 +3,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from database.models import UserManager, CompanyManager, TaskManager
-from utils.keyboards import get_main_keyboard, get_back_keyboard, get_task_urgent_keyboard, get_task_deadline_keyboard
+from utils.keyboards import get_main_keyboard, get_back_keyboard, get_task_urgent_keyboard, get_task_deadline_keyboard, clear_previous_messages
 from utils.states import TaskStates
 from datetime import datetime, timedelta
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -16,6 +16,10 @@ async def create_task_handler(message: Message, state: FSMContext):
     try:
         print("=== Вызван create_task_handler ===")
         telegram_id = message.from_user.id
+        
+        # Очищаем чат
+        from main import bot
+        await clear_previous_messages(bot, telegram_id, 10)
         
         # Проверяем права пользователя
         user = UserManager.get_user_by_telegram_id(telegram_id)
@@ -34,8 +38,14 @@ async def create_task_handler(message: Message, state: FSMContext):
         
         await message.answer(
             "📋 Создание новой задачи\n\n"
-            "Шаг 1/5: Введите название задачи:",
+            "Шаг 1/6: Введите название задачи:",
             reply_markup=get_back_keyboard()
+        )
+        
+        # Восстанавливаем нижнее меню
+        await message.answer(
+            "Главное меню:",
+            reply_markup=get_main_keyboard(user['role'])
         )
         
     except Exception as e:

@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from database.models import UserManager, CompanyManager
-from utils.keyboards import get_main_keyboard, get_company_management_keyboard, get_back_keyboard, get_skip_keyboard
+from utils.keyboards import get_main_keyboard, get_company_management_keyboard, get_back_keyboard, get_skip_keyboard, clear_previous_messages
 from utils.states import CompanyStates
 
 async def company_management_handler(message: Message):
@@ -11,6 +11,10 @@ async def company_management_handler(message: Message):
     try:
         print("=== Вызван company_management_handler ===")
         telegram_id = message.from_user.id
+        
+        # Очищаем чат
+        from main import bot
+        await clear_previous_messages(bot, telegram_id, 10)
         
         # Проверяем права пользователя
         user = UserManager.get_user_by_telegram_id(telegram_id)
@@ -25,6 +29,12 @@ async def company_management_handler(message: Message):
             "🏢 Управление компаниями\n\n"
             "Выберите действие:",
             reply_markup=get_company_management_keyboard()
+        )
+        
+        # Восстанавливаем нижнее меню
+        await message.answer(
+            "Главное меню:",
+            reply_markup=get_main_keyboard(user['role'])
         )
         
     except Exception as e:
@@ -106,7 +116,8 @@ async def back_to_main_handler(message: Message, state: FSMContext):
         await state.clear()
         
         telegram_id = message.from_user.id
-        
+
+       
         # Получаем пользователя для определения роли
         user = UserManager.get_user_by_telegram_id(telegram_id)
         role = user['role'] if user else 'admin'

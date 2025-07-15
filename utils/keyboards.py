@@ -104,3 +104,29 @@ def get_skip_keyboard():
         resize_keyboard=True,
         one_time_keyboard=False
     )
+
+
+async def clear_previous_messages(bot, chat_id, count=10):
+    """
+    Удаляет предыдущие сообщения бота
+    bot: экземпляр бота
+    chat_id: ID чата  
+    count: количество сообщений для проверки
+    """
+    try:
+        # Отправляем временное сообщение для получения текущего message_id
+        temp_msg = await bot.send_message(chat_id, ".")
+        current_msg_id = temp_msg.message_id
+        
+        # Удаляем временное сообщение
+        await bot.delete_message(chat_id, current_msg_id)
+        
+        # Проверяем предыдущие сообщения и удаляем
+        for msg_id in range(current_msg_id - 1, max(0, current_msg_id - count), -1):
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except:
+                continue
+                
+    except Exception as e:
+        print(f"Ошибка очистки сообщений: {e}")
