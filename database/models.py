@@ -260,11 +260,11 @@ class UserManager:
             print(f"Ошибка получения исполнителей: {e}")
             return []
 
-class TaskManager:
-    
+class TaskManager:    
+
     @staticmethod
     def create_task(title, description, company_id, initiator_name, initiator_phone,
-                assignee_id, created_by, priority, deadline):
+                assignee_id, created_by, is_urgent, deadline):
         """Создание новой задачи"""
         task_id = generate_uuid()
         current_time = get_current_time()
@@ -278,11 +278,11 @@ class TaskManager:
         
         query = f"""
         INSERT INTO tasks (task_id, title, description, company_id, initiator_name,
-                        initiator_phone, assignee_id, created_by, priority, status,
+                        initiator_phone, assignee_id, created_by, is_urgent, status,
                         deadline, created_at, updated_at)
         VALUES ('{task_id}', '{title}', {description_val}, '{company_id}',
                 '{initiator_name}', '{initiator_phone}', '{assignee_id}',
-                '{created_by}', '{priority}', 'new',
+                '{created_by}', {is_urgent}, 'new',
                 Timestamp('{deadline_str}'),
                 Timestamp('{current_str}'),
                 Timestamp('{current_str}'));
@@ -299,7 +299,7 @@ class TaskManager:
         """Получение задач пользователя в зависимости от роли"""
         if role in ['director', 'manager']:
             query = """
-            SELECT t.task_id, t.title, t.description, t.priority, t.status, t.deadline, t.created_at,
+            SELECT t.task_id, t.title, t.description, t.is_urgent, t.status, t.deadline, t.created_at,
                    c.name as company_name
             FROM tasks AS t
             INNER JOIN companies AS c ON t.company_id = c.company_id
@@ -321,16 +321,10 @@ class TaskManager:
 
             status_emoji = {
                 'new': '🆕',
-                'in_progress': '🔄', 
+                'in_progress': '⏳', 
                 'completed': '✅',
-                'cancelled': '❌',
-                'overdue': '⏰'
-            }
-            
-            priority_emoji = {
-                'urgent': '🔴',
-                'normal': '🟡',
-                'low': '🟢'
+                'overdue': '⚠️',
+                'cancelled': '❌'
             }
             
             if result[0].rows:
@@ -342,17 +336,33 @@ class TaskManager:
                     
                     deadline_str = parse_deadline(row['t.deadline'])
                     
+                    # Форматируем для отображения в списке (только дата)
+                    try:
+                        if isinstance(row['t.deadline'], str) and 'T' in row['t.deadline']:
+                            deadline_dt = datetime.fromisoformat(row['t.deadline'].replace('Z', '+00:00'))
+                        elif isinstance(row['t.deadline'], int):
+                            deadline_timestamp = row['t.deadline'] / 1000000
+                            deadline_dt = datetime.fromtimestamp(deadline_timestamp)
+                        else:
+                            deadline_dt = row['t.deadline']
+                        
+                        deadline_short = deadline_dt.strftime('%d.%m')
+                    except:
+                        deadline_short = deadline_str
+                    
                     tasks.append({
                         'task_id': decode_if_bytes(row['t.task_id']),
                         'title': decode_if_bytes(row['t.title']),
                         'description': decode_if_bytes(row['t.description']),
-                        'priority': decode_if_bytes(row['t.priority']),
+                        'is_urgent': row['t.is_urgent'],
+                        'deadline_short': deadline_short,
                         'status': decode_if_bytes(row['t.status']),
                         'deadline_str': deadline_str,
+                        'deadline_short': deadline_short,
                         'created_at': row['t.created_at'],
+                        'deadline_short': deadline_short,
                         'company_name': decode_if_bytes(row['company_name']),
-                        'status_emoji': status_emoji.get(decode_if_bytes(row['t.status']), '❓'),
-                        'priority_emoji': priority_emoji.get(decode_if_bytes(row['t.priority']), '⚪')
+                        'status_emoji': status_emoji.get(decode_if_bytes(row['t.status']), '❓')
                     })
             
             return tasks
@@ -409,7 +419,7 @@ class TaskManager:
     def get_task_by_id(task_id):
         """Получение подробной информации о задаче"""
         query = f"""
-        SELECT t.task_id, t.title, t.description, t.priority, t.status, t.deadline, t.created_at,
+        SELECT t.task_id, t.title, t.description, t.is_urgent, t.status, t.deadline, t.created_at,
                c.name as company_name, t.initiator_name, t.initiator_phone
         FROM tasks AS t
         INNER JOIN companies AS c ON t.company_id = c.company_id
@@ -433,7 +443,7 @@ class TaskManager:
                     'task_id': decode_if_bytes(row['t.task_id']),
                     'title': decode_if_bytes(row['t.title']),
                     'description': decode_if_bytes(row['t.description']),
-                    'priority': decode_if_bytes(row['t.priority']),
+                    'is_urgent': row['t.is_urgent'],
                     'status': decode_if_bytes(row['t.status']),
                     'deadline_str': parse_deadline(row['t.deadline']),
                     'created_at': row['t.created_at'],
@@ -445,6 +455,25 @@ class TaskManager:
         except Exception as e:
             print(f"Ошибка получения задачи: {e}")
             return None
+
+    @staticmethod
+    def update_task_status(task_id, new_status):
+        """Изменение статуса задачи"""
+        current_time = get_current_time()
+        current_str = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        query = f"""
+        UPDATE tasks
+        SET status = '{new_status}', updated_at = Timestamp('{current_str}')
+        WHERE task_id = '{task_id}';
+        """
+        
+        try:
+            db_connection.execute_query(query)
+            return True
+        except Exception as e:
+            print(f"Ошибка изменения статуса задачи: {e}")
+            return False
 
 class CompanyManager:
     
@@ -564,8 +593,8 @@ class FileManager:
         """Получение всех файлов задачи"""
         query = f"""
         SELECT f.file_id, f.file_name, f.file_path, f.file_size, f.content_type, 
-               f.thumbnail_path, f.created_at,
-               u.first_name, u.last_name, u.username
+           f.thumbnail_path, f.created_at,
+           u.first_name as first_name, u.last_name as last_name, u.username as username
         FROM task_files f
         JOIN users u ON f.user_id = u.user_id
         WHERE f.task_id = '{task_id}'

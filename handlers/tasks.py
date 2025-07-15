@@ -3,7 +3,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from database.models import UserManager, CompanyManager, TaskManager
-from utils.keyboards import get_main_keyboard, get_back_keyboard, get_task_priority_keyboard, get_task_deadline_keyboard
+from utils.keyboards import get_main_keyboard, get_back_keyboard, get_task_urgent_keyboard, get_task_deadline_keyboard
 from utils.states import TaskStates
 from datetime import datetime, timedelta
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -378,7 +378,7 @@ async def process_assignee_selection(message: Message, state: FSMContext):
         await message.answer(
             f"✅ Исполнитель: {message.text}\n\n"
             f"Выберите приоритет задачи:",
-            reply_markup=get_task_priority_keyboard()
+            reply_markup=get_task_urgent_keyboard()
         )
         
     except Exception as e:
@@ -390,29 +390,28 @@ async def process_priority_selection(message: Message, state: FSMContext):
     try:
         print("=== Вызван process_priority_selection ===")
         
-        # Определяем приоритет
-        priority_map = {
-            "🔴 Срочная": "urgent",
-            "🟡 Обычная": "normal", 
-            "🟢 Не очень срочная": "low"
-        }
-        
-        if message.text not in priority_map:
+        if message.text == "🔥 Срочная":
+            # Сохраняем срочную задачу
+            await state.update_data(is_urgent=True)
+            priority_text = "🔥 Срочная"
+            
+        elif message.text == "📝 Обычная":
+            # Сохраняем обычную задачу
+            await state.update_data(is_urgent=False)
+            priority_text = "📝 Обычная"
+            
+        else:
             await message.answer(
                 "❌ Выберите приоритет из предложенных:",
-                reply_markup=get_task_priority_keyboard()
+                reply_markup=get_task_urgent_keyboard()
             )
             return
-        
-        # Сохраняем приоритет
-        priority = priority_map[message.text]
-        await state.update_data(priority=priority, priority_text=message.text)
         
         # Переходим к выбору дедлайна
         await state.set_state(TaskStates.waiting_for_deadline)
         
         await message.answer(
-            f"✅ Приоритет: {message.text}\n\n"
+            f"✅ Приоритет: {priority_text}\n\n"
             f"Выберите дедлайн задачи:",
             reply_markup=get_task_deadline_keyboard()
         )
@@ -480,7 +479,7 @@ async def create_final_task(message: Message, state: FSMContext, deadline):
             initiator_phone=data['initiator_phone'],
             assignee_id=data['assignee_id'],
             created_by=data['created_by'],
-            priority=data['priority'],
+            is_urgent=data.get('is_urgent', False),
             deadline=deadline
         )
         
@@ -562,7 +561,9 @@ async def create_final_task(message: Message, state: FSMContext, deadline):
             success_text += f"📋 Название: {data['task_title']}\n"
             success_text += f"🏢 Компания: {data['company_name']}\n"
             success_text += f"👤 Исполнитель: {data['assignee_name']}\n"
-            success_text += f"⚡ Приоритет: {data['priority_text']}\n"
+            is_urgent = data.get('is_urgent', False)
+            priority_text = "🔥 Срочная" if is_urgent else ""
+            success_text += f"⚡ Приоритет: {priority_text}\n"
             success_text += f"📅 Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n"
             success_text += f"📞 Инициатор: {data['initiator_name']} ({data['initiator_phone']})"
 
@@ -588,7 +589,7 @@ async def create_final_task(message: Message, state: FSMContext, deadline):
                     notification_text = f"📋 Вам назначена новая задача!\n\n"
                     notification_text += f"Название: {data['task_title']}\n"
                     notification_text += f"Компания: {data['company_name']}\n"
-                    notification_text += f"Приоритет: {data['priority_text']}\n"
+                    notification_text += f"Приоритет: {priority_text}\n"
                     notification_text += f"Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}"
                     
                     await bot.send_message(assignee_telegram_id, notification_text)
@@ -843,7 +844,7 @@ async def create_final_task_from_callback(callback: CallbackQuery, state: FSMCon
             initiator_phone=data['initiator_phone'],
             assignee_id=data['assignee_id'],
             created_by=data['created_by'],
-            priority=data['priority'],
+            is_urgent=data.get('is_urgent', False),
             deadline=deadline
         )
         
@@ -919,12 +920,15 @@ async def create_final_task_from_callback(callback: CallbackQuery, state: FSMCon
                     except Exception as e:
                         print(f"Ошибка обработки файла: {e}")
                         
-            # Формируем сообщение об успехе
+            is_urgent = data.get('is_urgent', False)
+            priority_text = "🔥 Срочная" if is_urgent else ""
+
             success_text = "✅ Задача успешно создана!\n\n"
             success_text += f"📋 Название: {data['task_title']}\n"
             success_text += f"🏢 Компания: {data['company_name']}\n"
             success_text += f"👤 Исполнитель: {data['assignee_name']}\n"
-            success_text += f"⚡ Приоритет: {data['priority_text']}\n"
+            if priority_text:
+                success_text += f"⚡ Приоритет: {priority_text}\n"
             success_text += f"📅 Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n"
             success_text += f"📞 Инициатор: {data['initiator_name']} ({data['initiator_phone']})"
 
@@ -951,7 +955,8 @@ async def create_final_task_from_callback(callback: CallbackQuery, state: FSMCon
                     notification_text = f"📋 Вам назначена новая задача!\n\n"
                     notification_text += f"Название: {data['task_title']}\n"
                     notification_text += f"Компания: {data['company_name']}\n"
-                    notification_text += f"Приоритет: {data['priority_text']}\n"
+                    if priority_text:
+                        notification_text += f"Приоритет: {priority_text}\n"
                     notification_text += f"Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}"
                     
                     await bot.send_message(assignee_telegram_id, notification_text)

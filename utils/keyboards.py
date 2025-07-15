@@ -53,11 +53,11 @@ def get_staff_management_keyboard():
         one_time_keyboard=False
     )
 
-def get_task_priority_keyboard():
-    """Клавиатура для выбора приоритета задачи"""
+def get_task_urgent_keyboard():
+    """Клавиатура для выбора срочности задачи"""
     buttons = [
-        [KeyboardButton(text="🔴 Срочная"), KeyboardButton(text="🟡 Обычная")],
-        [KeyboardButton(text="🟢 Не очень срочная"), KeyboardButton(text="❌ Отмена")]
+        [KeyboardButton(text="🔥 Срочная"), KeyboardButton(text="📝 Обычная")],
+        [KeyboardButton(text="❌ Отмена")]
     ]
     
     return ReplyKeyboardMarkup(

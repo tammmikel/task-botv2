@@ -28,33 +28,39 @@ async def my_tasks_handler(message: Message):
             )
             return
         
-        # Получаем компании с задачами
-        companies = TaskManager.get_companies_with_tasks(user['user_id'], user['role'])
+        # Формируем кнопки управления
+        control_buttons = [
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_tasks"),
+             InlineKeyboardButton(text="🏢 Фильтр по компаниям", callback_data="filter_companies")]
+        ]
         
-        # Формируем список задач
-        tasks_text = f"📝 Ваши задачи ({len(tasks)}):\n\n"
-        
-        keyboard = []
-        for i, task in enumerate(tasks[:15], 1):  # Показываем первые 15 задач
-            task_line = f"{i}. {task['status_emoji']} {task['title']}\n"
-            task_line += f"   {task['priority_emoji']} {task['company_name']} | ⏰ {task['deadline_str']}\n\n"
-            tasks_text += task_line
+        # Формируем кнопки с задачами
+        task_buttons = []
+        for task in tasks[:15]:  # Показываем первые 15 задач
+            # Формируем текст кнопки
+            urgent_emoji = "🔥" if task.get('is_urgent', False) else ""
+            status_names = {
+                'new': 'Новая',
+                'in_progress': 'В процессе', 
+                'completed': 'Выполнена',
+                'overdue': 'Просрочена',
+                'cancelled': 'Отменена'
+            }
             
-            # Добавляем кнопку для просмотра задачи
-            keyboard.append([InlineKeyboardButton(
-                text=f"{i}. {task['title'][:35]}...",
+            status_name = status_names.get(task['status'], task['status'])
+            button_text = f"{task['status_emoji']}{urgent_emoji} {status_name} | {task['title'][:25]}... | {task['company_name']} | {task.get('deadline_short', '')}"
+            
+            task_buttons.append([InlineKeyboardButton(
+                text=button_text,
                 callback_data=f"task_{task['task_id']}"
             )])
         
-        # Добавляем кнопки фильтрации по компаниям
-        if companies:
-            keyboard.append([InlineKeyboardButton(
-                text="📊 Фильтр по компаниям",
-                callback_data="filter_companies"
-            )])
+        # Объединяем все кнопки
+        keyboard = control_buttons + task_buttons
         
+        tasks_text = f"📝 Ваши задачи ({len(tasks)}):"
         if len(tasks) > 15:
-            tasks_text += f"... и еще {len(tasks) - 15} задач(и)"
+            tasks_text += f"\n\nПоказано первые 15 из {len(tasks)} задач"
         
         # Отправляем список
         await message.answer(
@@ -87,7 +93,8 @@ async def process_task_callback(callback: CallbackQuery):
             detail_text = f"📋 {task['title']}\n\n"
             detail_text += f"📝 Описание: {task['description']}\n"
             detail_text += f"🏢 Компания: {task['company_name']}\n"
-            detail_text += f"⚡ Приоритет: {task['priority']}\n"
+            if task.get('is_urgent', False):
+                detail_text += f"⚡ Приоритет: 🔥 Срочная\n"
             detail_text += f"📊 Статус: {task['status']}\n"
             detail_text += f"📅 Дедлайн: {task['deadline_str']}\n"
             detail_text += f"📞 Инициатор: {task['initiator_name']}\n"
@@ -126,15 +133,102 @@ async def process_task_callback(callback: CallbackQuery):
             
         elif data == "back_to_tasks":
             # Возвращаемся к списку задач
-            await callback.message.delete()
-            # Эмулируем нажатие на "Мои задачи"
-            fake_message = callback.message
-            fake_message.text = "📝 Мои задачи"
-            fake_message.from_user = callback.from_user
-            await my_tasks_handler(fake_message)
+            telegram_id = callback.from_user.id
+            user = UserManager.get_user_by_telegram_id(telegram_id)
+            tasks = TaskManager.get_user_tasks(user['user_id'], user['role'])
             
+            if not tasks:
+                await callback.message.edit_text("📝 У вас пока нет задач")
+                return
+            
+            # Формируем кнопки как в основном обработчике
+            control_buttons = [
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_tasks"),
+                 InlineKeyboardButton(text="🏢 Фильтр по компаниям", callback_data="filter_companies")]
+            ]
+            
+            task_buttons = []
+            for task in tasks[:15]:
+                urgent_emoji = "🔥" if task.get('is_urgent', False) else ""
+                status_names = {
+                    'new': 'Новая',
+                    'in_progress': 'В процессе', 
+                    'completed': 'Выполнена',
+                    'overdue': 'Просрочена',
+                    'cancelled': 'Отменена'
+                }
+                
+                status_name = status_names.get(task['status'], task['status'])
+                button_text = f"{task['status_emoji']}{urgent_emoji} {status_name} | {task['title'][:25]}... | {task['company_name']} | {task.get('deadline_short', '')}"
+                
+                task_buttons.append([InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"task_{task['task_id']}"
+                )])
+            
+            keyboard = control_buttons + task_buttons
+            
+            tasks_text = f"📝 Ваши задачи ({len(tasks)}):"
+            if len(tasks) > 15:
+                tasks_text += f"\n\nПоказано первые 15 из {len(tasks)} задач"
+            
+            await callback.message.edit_text(
+                tasks_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+            )
+
+        elif data == "refresh_tasks":
+            # Получаем обновленный список задач
+            telegram_id = callback.from_user.id
+            user = UserManager.get_user_by_telegram_id(telegram_id)
+            tasks = TaskManager.get_user_tasks(user['user_id'], user['role'])
+            
+            if not tasks:
+                await callback.message.edit_text("📝 У вас пока нет задач")
+                await callback.answer("Список обновлен")
+                return
+            
+            # Формируем новые кнопки
+            control_buttons = [
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_tasks"),
+                 InlineKeyboardButton(text="🏢 Фильтр по компаниям", callback_data="filter_companies")]
+            ]
+            
+            task_buttons = []
+            for task in tasks[:15]:
+                urgent_emoji = "🔥" if task.get('is_urgent', False) else ""
+                status_names = {
+                    'new': 'Новая',
+                    'in_progress': 'В процессе', 
+                    'completed': 'Выполнена',
+                    'overdue': 'Просрочена',
+                    'cancelled': 'Отменена'
+                }
+                
+                status_name = status_names.get(task['status'], task['status'])
+                button_text = f"{task['status_emoji']}{urgent_emoji} {status_name} | {task['title'][:25]}... | {task['company_name']} | {task.get('deadline_short', '')}"
+                
+                task_buttons.append([InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"task_{task['task_id']}"
+                )])
+            
+            keyboard = control_buttons + task_buttons
+            
+            # Добавляем временную метку
+            from datetime import datetime
+            current_time = datetime.now().strftime("%H:%M:%S")
+            tasks_text = f"📝 Ваши задачи ({len(tasks)}) - обновлено {current_time}"
+            if len(tasks) > 15:
+                tasks_text += f"\n\nПоказано первые 15 из {len(tasks)} задач"
+            
+            await callback.message.edit_text(
+                tasks_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+            )
+            
+            await callback.answer("✅ Список обновлен")
         await callback.answer()
-        
     except Exception as e:
         print(f"Ошибка в process_task_callback: {e}")
         await callback.answer("Произошла ошибка")
@@ -146,3 +240,4 @@ def register_my_tasks_handlers(dp: Dispatcher):
     dp.callback_query.register(process_task_callback, F.data == "filter_companies")
     dp.callback_query.register(process_task_callback, F.data == "back_to_tasks")
     dp.callback_query.register(process_task_callback, F.data.startswith("company_"))
+    dp.callback_query.register(process_task_callback, F.data == "refresh_tasks")
