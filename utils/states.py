@@ -15,3 +15,4 @@ class TaskStates(StatesGroup):
     waiting_for_assignee = State()
     waiting_for_priority = State()
     waiting_for_deadline = State()
+    waiting_for_custom_date = State()

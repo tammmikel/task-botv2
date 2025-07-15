@@ -8,6 +8,7 @@ from database.models import DatabaseManager
 from handlers.start import register_start_handlers
 from handlers.companies import register_company_handlers
 from handlers.tasks import register_task_handlers
+from handlers.my_tasks import register_my_tasks_handlers
 
 # Получение токена бота
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -38,6 +39,7 @@ def register_handlers():
     register_start_handlers(dp)
     register_company_handlers(dp)
     register_task_handlers(dp)
+    register_my_tasks_handlers(dp)
 
 async def process_update(event, context):
     """Основная функция для обработки обновлений от Telegram"""

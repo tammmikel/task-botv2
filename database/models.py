@@ -2,6 +2,29 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from .connection import db_connection
 
+def parse_deadline(deadline_value):
+    """Универсальная функция парсинга дедлайна из YDB"""
+    if not deadline_value:
+        return 'Без дедлайна'
+    
+    try:
+        # Проверяем формат - если строка ISO (новый формат)
+        if isinstance(deadline_value, str) and 'T' in deadline_value:
+            deadline_dt = datetime.fromisoformat(deadline_value.replace('Z', '+00:00'))
+        # Если число в микросекундах (старый формат)
+        elif isinstance(deadline_value, int):
+            deadline_timestamp = deadline_value / 1000000
+            deadline_dt = datetime.fromtimestamp(deadline_timestamp)
+        else:
+            # Если уже datetime объект
+            deadline_dt = deadline_value
+        
+        return deadline_dt.strftime('%d.%m.%Y %H:%M')
+    except Exception as e:
+        print(f"Ошибка парсинга даты {deadline_value}: {e}")
+        return 'Дата некорректна'
+
+
 # Часовой пояс UTC+5
 TIMEZONE = timezone(timedelta(hours=5))
 
@@ -87,6 +110,8 @@ class DatabaseManager:
             file_name String NOT NULL,
             file_path String NOT NULL,
             file_size Int64 NOT NULL,
+            content_type String NOT NULL,
+            thumbnail_path String,
             created_at Timestamp,
             PRIMARY KEY (file_id)
         );
@@ -126,7 +151,7 @@ class UserManager:
         
         query = f"""
         INSERT INTO users (user_id, telegram_id, username, first_name, last_name, role, created_at)
-        VALUES ('{user_id}', {telegram_id}, {username_val}, {first_name_val}, {last_name_val}, '{role}', CAST('{current_time.isoformat()}' AS Timestamp));
+        VALUES ('{user_id}', {telegram_id}, {username_val}, {first_name_val}, {last_name_val}, '{role}', Timestamp('{current_time.isoformat()}'));
         """
         
         try:
@@ -202,11 +227,11 @@ class UserManager:
     
     @staticmethod
     def get_assignees():
-        """Получение списка исполнителей (админы, главный админ, директор, менеджер)"""
+        """Получение списка исполнителей (все роли могут быть исполнителями)"""
         query = """
         SELECT user_id, telegram_id, username, first_name, last_name, role
         FROM users
-        WHERE role IN ('admin', 'main_admin', 'director', 'manager')
+        WHERE role IN ('director', 'manager', 'main_admin', 'admin')
         ORDER BY first_name, last_name;
         """
         
@@ -238,8 +263,8 @@ class UserManager:
 class TaskManager:
     
     @staticmethod
-    def create_task(title, description, company_id, initiator_name, initiator_phone, 
-                   assignee_id, created_by, priority, deadline):
+    def create_task(title, description, company_id, initiator_name, initiator_phone,
+                assignee_id, created_by, priority, deadline):
         """Создание новой задачи"""
         task_id = generate_uuid()
         current_time = get_current_time()
@@ -247,16 +272,20 @@ class TaskManager:
         # Подготовка значений для вставки
         description_val = f"'{description}'" if description else "NULL"
         
+        # Форматируем даты в ISO формат для YDB
+        deadline_str = deadline.strftime('%Y-%m-%dT%H:%M:%SZ')
+        current_str = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
         query = f"""
-        INSERT INTO tasks (task_id, title, description, company_id, initiator_name, 
-                          initiator_phone, assignee_id, created_by, priority, status, 
-                          deadline, created_at, updated_at)
-        VALUES ('{task_id}', '{title}', {description_val}, '{company_id}', 
-                '{initiator_name}', '{initiator_phone}', '{assignee_id}', 
-                '{created_by}', '{priority}', 'new', 
-                CAST('{deadline.isoformat()}' AS Timestamp),
-                CAST('{current_time.isoformat()}' AS Timestamp),
-                CAST('{current_time.isoformat()}' AS Timestamp));
+        INSERT INTO tasks (task_id, title, description, company_id, initiator_name,
+                        initiator_phone, assignee_id, created_by, priority, status,
+                        deadline, created_at, updated_at)
+        VALUES ('{task_id}', '{title}', {description_val}, '{company_id}',
+                '{initiator_name}', '{initiator_phone}', '{assignee_id}',
+                '{created_by}', '{priority}', 'new',
+                Timestamp('{deadline_str}'),
+                Timestamp('{current_str}'),
+                Timestamp('{current_str}'));
         """
         
         try:
@@ -264,6 +293,157 @@ class TaskManager:
             return task_id
         except Exception as e:
             print(f"Ошибка создания задачи: {e}")
+            return None
+    @staticmethod
+    def get_user_tasks(user_id, role):
+        """Получение задач пользователя в зависимости от роли"""
+        if role in ['director', 'manager']:
+            query = """
+            SELECT t.task_id, t.title, t.description, t.priority, t.status, t.deadline, t.created_at,
+                   c.name as company_name
+            FROM tasks AS t
+            INNER JOIN companies AS c ON t.company_id = c.company_id
+            ORDER BY t.created_at DESC;
+            """
+        else:
+            query = f"""
+            SELECT t.task_id, t.title, t.description, t.priority, t.status, t.deadline, t.created_at,
+                   c.name as company_name
+            FROM tasks AS t
+            INNER JOIN companies AS c ON t.company_id = c.company_id
+            WHERE t.assignee_id = '{user_id}'
+            ORDER BY t.created_at DESC;
+            """
+        
+        try:
+            result = db_connection.execute_query(query)
+            tasks = []
+
+            status_emoji = {
+                'new': '🆕',
+                'in_progress': '🔄', 
+                'completed': '✅',
+                'cancelled': '❌',
+                'overdue': '⏰'
+            }
+            
+            priority_emoji = {
+                'urgent': '🔴',
+                'normal': '🟡',
+                'low': '🟢'
+            }
+            
+            if result[0].rows:
+                for row in result[0].rows:
+                    def decode_if_bytes(value):
+                        if isinstance(value, bytes):
+                            return value.decode('utf-8')
+                        return value
+                    
+                    deadline_str = parse_deadline(row['t.deadline'])
+                    
+                    tasks.append({
+                        'task_id': decode_if_bytes(row['t.task_id']),
+                        'title': decode_if_bytes(row['t.title']),
+                        'description': decode_if_bytes(row['t.description']),
+                        'priority': decode_if_bytes(row['t.priority']),
+                        'status': decode_if_bytes(row['t.status']),
+                        'deadline_str': deadline_str,
+                        'created_at': row['t.created_at'],
+                        'company_name': decode_if_bytes(row['company_name']),
+                        'status_emoji': status_emoji.get(decode_if_bytes(row['t.status']), '❓'),
+                        'priority_emoji': priority_emoji.get(decode_if_bytes(row['t.priority']), '⚪')
+                    })
+            
+            return tasks
+        except Exception as e:
+            print(f"Ошибка получения задач: {e}")
+            return []
+
+    @staticmethod
+    def get_companies_with_tasks(user_id, role):
+        """Получение компаний с количеством задач"""
+        if role in ['director', 'manager']:
+            query = """
+            SELECT c.company_id, c.name, COUNT(t.task_id) as task_count
+            FROM companies c
+            LEFT JOIN tasks t ON c.company_id = t.company_id
+            GROUP BY c.company_id, c.name
+            HAVING task_count > 0
+            ORDER BY c.name;
+            """
+        else:
+            query = f"""
+            SELECT c.company_id, c.name, COUNT(t.task_id) as task_count
+            FROM companies c
+            LEFT JOIN tasks t ON c.company_id = t.company_id
+            WHERE t.assignee_id = '{user_id}'
+            GROUP BY c.company_id, c.name
+            HAVING task_count > 0
+            ORDER BY c.name;
+            """
+        
+        try:
+            result = db_connection.execute_query(query)
+            companies = []
+            
+            if result[0].rows:
+                for row in result[0].rows:
+                    def decode_if_bytes(value):
+                        if isinstance(value, bytes):
+                            return value.decode('utf-8')
+                        return value
+                    
+                    companies.append({
+                        'company_id': decode_if_bytes(row.company_id),
+                        'name': decode_if_bytes(row.name),
+                        'task_count': row.task_count
+                    })
+            
+            return companies
+        except Exception as e:
+            print(f"Ошибка получения компаний: {e}")
+            return []
+
+    @staticmethod
+    def get_task_by_id(task_id):
+        """Получение подробной информации о задаче"""
+        query = f"""
+        SELECT t.task_id, t.title, t.description, t.priority, t.status, t.deadline, t.created_at,
+               c.name as company_name, t.initiator_name, t.initiator_phone
+        FROM tasks AS t
+        INNER JOIN companies AS c ON t.company_id = c.company_id
+        WHERE t.task_id = '{task_id}';
+        """
+        
+        try:
+            result = db_connection.execute_query(query)
+            if result[0].rows:
+                row = result[0].rows[0]
+                
+                def decode_if_bytes(value):
+                    if isinstance(value, bytes):
+                        return value.decode('utf-8')
+                    return value
+                
+                # Парсим дедлайн
+                deadline_str = parse_deadline(row['t.deadline'])
+                
+                return {
+                    'task_id': decode_if_bytes(row['t.task_id']),
+                    'title': decode_if_bytes(row['t.title']),
+                    'description': decode_if_bytes(row['t.description']),
+                    'priority': decode_if_bytes(row['t.priority']),
+                    'status': decode_if_bytes(row['t.status']),
+                    'deadline_str': parse_deadline(row['t.deadline']),
+                    'created_at': row['t.created_at'],
+                    'company_name': decode_if_bytes(row['company_name']),
+                    'initiator_name': decode_if_bytes(row['t.initiator_name']),
+                    'initiator_phone': decode_if_bytes(row['t.initiator_phone'])
+                }
+            return None
+        except Exception as e:
+            print(f"Ошибка получения задачи: {e}")
             return None
 
 class CompanyManager:
@@ -279,7 +459,7 @@ class CompanyManager:
         
         query = f"""
         INSERT INTO companies (company_id, name, description, created_by, created_at)
-        VALUES ('{company_id}', '{name}', {description_val}, '{created_by}', CAST('{current_time.isoformat()}' AS Timestamp));
+        VALUES ('{company_id}', '{name}', {description_val}, '{created_by}', Timestamp('{current_time.isoformat()}'));
         """
         
         try:
@@ -353,3 +533,72 @@ class CompanyManager:
         except Exception as e:
             print(f"Ошибка получения компании: {e}")
             return None
+
+class FileManager:
+    
+    @staticmethod
+    def save_file_info(task_id, user_id, file_id, file_name, file_path, file_size, content_type, thumbnail_path=None):
+        """Сохранение информации о файле в БД"""
+        current_time = get_current_time()
+        
+        # Подготовка значений для вставки
+        thumbnail_val = f"'{thumbnail_path}'" if thumbnail_path else "NULL"
+        
+        query = f"""
+        INSERT INTO task_files (file_id, task_id, user_id, file_name, file_path, 
+                               file_size, content_type, thumbnail_path, created_at)
+        VALUES ('{file_id}', '{task_id}', '{user_id}', '{file_name}', '{file_path}', 
+                {file_size}, '{content_type}', {thumbnail_val}, 
+                Timestamp('{current_time.strftime('%Y-%m-%dT%H:%M:%SZ')}'));
+        """
+        
+        try:
+            db_connection.execute_query(query)
+            return True
+        except Exception as e:
+            print(f"Ошибка сохранения файла: {e}")
+            return False
+    
+    @staticmethod
+    def get_task_files(task_id):
+        """Получение всех файлов задачи"""
+        query = f"""
+        SELECT f.file_id, f.file_name, f.file_path, f.file_size, f.content_type, 
+               f.thumbnail_path, f.created_at,
+               u.first_name, u.last_name, u.username
+        FROM task_files f
+        JOIN users u ON f.user_id = u.user_id
+        WHERE f.task_id = '{task_id}'
+        ORDER BY f.created_at DESC;
+        """
+        
+        try:
+            result = db_connection.execute_query(query)
+            files = []
+            
+            if result[0].rows:
+                for row in result[0].rows:
+                    def decode_if_bytes(value):
+                        if isinstance(value, bytes):
+                            return value.decode('utf-8')
+                        return value
+                    
+                    uploader_name = f"{decode_if_bytes(row.first_name) or ''} {decode_if_bytes(row.last_name) or ''}".strip()
+                    if not uploader_name:
+                        uploader_name = decode_if_bytes(row.username) or "Неизвестный"
+                    
+                    files.append({
+                        'file_id': decode_if_bytes(row.file_id),
+                        'file_name': decode_if_bytes(row.file_name),
+                        'file_path': decode_if_bytes(row.file_path),
+                        'file_size': row.file_size,
+                        'content_type': decode_if_bytes(row.content_type),
+                        'thumbnail_path': decode_if_bytes(row.thumbnail_path),
+                        'created_at': row.created_at,
+                        'uploader_name': uploader_name
+                    })
+            
+            return files
+        except Exception as e:
+            print(f"Ошибка получения файлов: {e}")
+            return []
